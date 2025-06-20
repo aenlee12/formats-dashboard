@@ -38,9 +38,10 @@ def prepare_data(files):
         raise ValueError("Нужны колонки «Доля списаний и ЗЦ» и «Выручка" )
     s = df_share['Доля списаний и ЗЦ'].astype(str).str.replace(',', '.').str.rstrip('%')
     df_share['Доля списаний и ЗЦ'] = pd.to_numeric(s, errors='coerce').fillna(0)
-    if df_share['Доля списаний и ЗЦ'].max() <= 1:
-        df_share['Доля списаний и ЗЦ'] *= 100
-    df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)
+    # перевести дробные значения (0-1) в проценты
+    df_share['Доля списаний и ЗЦ'] = df_share['Доля списаний и ЗЦ'].apply(lambda x: x * 100 if x <= 1 else x)
+    # Выручка в числа
+    df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)(df_rev['Выручка'], errors='coerce').fillna(0)
     return pd.merge(df_share, df_rev, on=['Категория','Неделя','DayOfWeek'], how='inner')
 
 
