@@ -110,10 +110,13 @@ def main():
         heat_norm,
         labels=dict(x="День недели", y="Категория", color="Нормал. выручка"),
         x=heat_norm.columns, y=heat_norm.index,
-        color_continuous_scale=['red','white','green'],
-        text=heat.values
+        color_continuous_scale=['red','white','green']
     )
-    fig_heat.update_traces(texttemplate="%{text:.0f}", xgap=1, ygap=1)
+    # Добавляем текст аннотации с реальными значениями
+    fig_heat.data[0].text = heat.values.tolist()
+    fig_heat.data[0].texttemplate = "%{text:.0f}"
+    fig_heat.data[0].hovertemplate = 'Категория=%{y}<br>День=%{x}<br>Выручка=%{text:.0f}<extra></extra>'
+    fig_heat.update_traces(xgap=1, ygap=1)
     fig_heat.update_layout(title="Heatmap выручки по дням недели", height=600)
     st.plotly_chart(fig_heat, use_container_width=True)
 
