@@ -56,7 +56,7 @@ def main():
     # Загрузка данных
     st.sidebar.header("1. Загрузка данных")
     files = st.sidebar.file_uploader(
-        "Загрузите два файла:\n• «Доля списаний и ЗЦ»\n• «Выручка»",
+        "Загрузите два файла:\n• Доля списаний и ЗЦ\n• Выручка",
         type=['csv','xlsx'], accept_multiple_files=True)
     if len(files) != 2:
         st.sidebar.info("Нужно загрузить ровно два файла.")
@@ -88,7 +88,7 @@ def main():
     weekly_cat = df.groupby(['Неделя','Категория']).agg(
         {'Выручка':'sum',
          'Доля списаний и ЗЦ': lambda s: np.average(s, weights=df.loc[s.index,'Выручка'])}
-    ).reset_index().rename(columns={'Доля списаний и ЗЦ':'Среднее % списаний', 'Выручка':'Сумма выручки'})
+    ).reset_index().rename(columns={'Доля списаний и ЗЦ':'Среднее % списаний','Выручка':'Сумма выручки'})
 
     fig_rev = px.line(weekly_cat, x='Неделя', y='Сумма выручки', color='Категория', markers=True,
                       title="Сумма выручки по неделям и категориям")
@@ -100,7 +100,7 @@ def main():
     fig_waste.update_layout(height=400)
     st.plotly_chart(fig_waste, use_container_width=True)
 
-    # Heatmap выручки (нормализовано по категории)
+    # Heatmap выручки (реальные значения + цвет по нормализации внутри категории)
     st.subheader(f"🗺 Heatmap выручки по дням недели (неделя {sel_week})")
     df_h = df[df['Неделя']==sel_week]
     heat = df_h.pivot_table(index='Категория', columns='DayOfWeek', values='Выручка', aggfunc='sum').fillna(0)
@@ -110,7 +110,8 @@ def main():
         labels=dict(x="День недели", y="Категория", color="Нормал. выручка"),
         x=heat_norm.columns, y=heat_norm.index,
         color_continuous_scale=['red','white','green'],
-        title="Heatmap выручки по дням недели (нормализовано по категории)"
+        text_auto=heat.values,
+        title="Heatmap выручки по дням недели"
     )
     fig_heat.update_traces(xgap=1, ygap=1)
     fig_heat.update_layout(height=600)
@@ -123,34 +124,47 @@ def main():
         days = sorted(df['DayOfWeek'].unique())
         day_map = {d: f"{d}-й" for d in days}
         test_week = st.sidebar.selectbox("Начальная неделя теста", all_weeks, index=len(all_weeks)-1)
+        test_day  = st.sidebar.selectbox("Начальный день теста", days, format_func=lambda d: day_map[d])
 
-        # Полные недели
-        complete = df.groupby('Неделя')['DayOfWeek'].nunique() == len(days)
-        full_weeks = complete[complete].index
-        weekly_full = df[df['Неделя'].isin(full_weeks)].groupby(['Неделя','Категория']).apply(
-            lambda g: pd.Series({
-                'Сумма выручки': g['Выручка'].sum(),
-                'Среднее % списаний': np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
-            })
-        ).reset_index()
+        # Разбиение на периоды
+        pre_mask = (df['Неделя'] < test_week) | ((df['Неделя']==test_week) & (df['DayOfWeek'] < test_day))
+        post_mask= (df['Неделя'] > test_week) | ((df['Неделя']==test_week) & (df['DayOfWeek'] >= test_day))
+        df_pre  = df[pre_mask]
+        df_post = df[post_mask]
 
-        # График выручки по категориям до/после теста
-        fig_rev_cat = px.line(
-            weekly_full, x='Неделя', y='Сумма выручки', color='Категория', markers=True,
-            title="Выручка тестовых недель по категориям"
+        # Усреднённая аналитика
+        rev_pre   = df_pre['Выручка'].mean()
+        rev_post  = df_post['Выручка'].mean()
+        waste_pre = np.average(df_pre['Доля списаний и ЗЦ'], weights=df_pre['Выручка'])
+        waste_post= np.average(df_post['Доля списаний и ЗЦ'], weights=df_post['Выручка'])
+        net_pre   = np.mean(df_pre['Выручка']*(1 - df_pre['Доля списаний и ЗЦ']/100))
+        net_post  = np.mean(df_post['Выручка']*(1 - df_post['Доля списаний и ЗЦ']/100))
+
+        st.subheader("📋 Усреднённая аналитика до/во время теста")
+        st.markdown(f"""
+- **Выручка (среднее)**: {rev_pre:.0f} → {rev_post:.0f} ₽ ({(rev_post/rev_pre-1)*100:.1f}% изменения)
+- **% списаний (среднее)**: {waste_pre:.1f}% → {waste_post:.1f}% ({(waste_post-waste_pre):+.1f} п.п.)
+- **Чистая выручка (среднее)**: {net_pre:.0f} → {net_post:.0f} ₽ ({(net_post/net_pre-1)*100:.1f}% изменения)
+"""
         )
-        fig_rev_cat.add_vline(x=test_week, line_color='red', line_dash='dash')
-        fig_rev_cat.update_layout(height=400)
-        st.plotly_chart(fig_rev_cat, use_container_width=True)
 
-        # График % списаний по категориям до/после теста
-        fig_waste_cat = px.line(
-            weekly_full, x='Неделя', y='Среднее % списаний', color='Категория', markers=True,
-            title="% списаний тестовых недель по категориям"
-        )
-        fig_waste_cat.add_vline(x=test_week, line_color='red', line_dash='dash')
-        fig_waste_cat.update_layout(height=400)
-        st.plotly_chart(fig_waste_cat, use_container_width=True)
+        # График общей выручки по неделям
+        weekly_sum = df.groupby('Неделя')['Выручка'].sum().reset_index()
+        fig_total_rev = px.line(weekly_sum, x='Неделя', y='Выручка', markers=True,
+                                title="Общая выручка по неделям")
+        fig_total_rev.add_vline(x=test_week, line_color='red', line_dash='dash')
+        fig_total_rev.update_layout(height=400)
+        st.plotly_chart(fig_total_rev, use_container_width=True)
+
+        # График среднего % списаний по неделям
+        weekly_waste = df.groupby('Неделя').apply(
+            lambda g: np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
+        ).reset_index(name='Среднее % списаний')
+        fig_total_waste = px.line(weekly_waste, x='Неделя', y='Среднее % списаний', markers=True,
+                                  title="Общий % списаний по неделям")
+        fig_total_waste.add_vline(x=test_week, line_color='red', line_dash='dash')
+        fig_total_waste.update_layout(height=400)
+        st.plotly_chart(fig_total_waste, use_container_width=True)
 
     # Экспорт данных
     buf = BytesIO()
@@ -159,7 +173,8 @@ def main():
         weekly_cat.to_excel(writer, sheet_name='trend_by_cat', index=False)
         heat.to_excel(writer, sheet_name=f'heat_{sel_week}', index=True)
         if test_mode:
-            weekly_full.to_excel(writer, sheet_name='trend_test_cat', index=False)
+            weekly_sum.to_excel(writer, sheet_name='sum_by_week', index=False)
+            weekly_waste.to_excel(writer, sheet_name='waste_by_week', index=False)
     buf.seek(0)
     st.download_button("💾 Скачать отчёт (Excel)", buf,
                        "dashboard.xlsx",
