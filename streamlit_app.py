@@ -8,7 +8,6 @@ st.set_page_config(page_title="Дашборд форматов", layout="wide")
 
 @st.cache_data
 def load_df(file):
-    """Load CSV/Excel and normalize column names."""
     if file.name.lower().endswith('.csv'):
         df = pd.read_csv(file)
     else:
@@ -25,7 +24,6 @@ def load_df(file):
 
 @st.cache_data
 def prepare_data(files):
-    """Merge share and revenue into one DataFrame."""
     df_share = df_rev = None
     info = []
     for f in files:
@@ -38,13 +36,10 @@ def prepare_data(files):
     if df_share is None or df_rev is None:
         details = "\n".join(f"{n}: {cols}" for n,cols in info)
         raise ValueError(f"Нужны колонки «Доля списаний и ЗЦ» и «Выручка».\n{details}")
-    # parse share
     s = df_share['Доля списаний и ЗЦ'].astype(str).str.replace(',', '.').str.rstrip('%')
     df_share['Доля списаний и ЗЦ'] = pd.to_numeric(s, errors='coerce').fillna(0)
-    # convert fraction to percent
     if df_share['Доля списаний и ЗЦ'].max() <= 1:
         df_share['Доля списаний и ЗЦ'] *= 100
-    # parse revenue
     df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)
     return pd.merge(df_share, df_rev, on=['Категория','Неделя','DayOfWeek'], how='inner')
 
@@ -65,7 +60,6 @@ def main():
         st.sidebar.error(e)
         return
 
-    # compute week average and pct
     df['avg_rev_week'] = df.groupby('Неделя')['Выручка'].transform('mean')
     df['rev_pct'] = df['Выручка'] / df['avg_rev_week'] * 100
 
@@ -77,22 +71,17 @@ def main():
     if weeks:
         df = df[df['Неделя'].isin(weeks)]
 
-    st.sidebar.header("3. Пороги подсветки")
-    share_thr = st.sidebar.slider("Порог % списаний", 0.0, 100.0, 20.0)
-    rev_thr = st.sidebar.slider("Мин. % выручки от среднего", 0.0, 200.0, 80.0)
-
-    # Heatmap week selector (always visible)
-    st.sidebar.header("4. Heatmap неделя")
+    st.sidebar.header("3. Heatmap неделя")
     all_weeks = sorted(df['Неделя'].unique())
-    last = all_weeks[-1]
     sel_week = st.sidebar.selectbox("Выберите неделю для Heatmap", all_weeks, index=len(all_weeks)-1)
 
-    # ——— General trends by category ———
+    # Общие тренды по категориям
     st.subheader("📈 Общие тренды по неделям и категориям")
-    weekly_cat = df.groupby(['Неделя','Категория']).agg({
-        'Выручка':'sum',
-        'Доля списаний и ЗЦ': lambda s: np.average(s, weights=df.loc[s.index,'Выручка'])
-    }).reset_index().rename(columns={'Доля списаний и ЗЦ':'% списаний'})
+    weekly_cat = df.groupby(['Неделя','Категория']).agg(
+        Выручка=('Выручка','sum'),
+        **{'% списаний': ( 'Доля списаний и ЗЦ',
+                         lambda s: np.average(s, weights=df.loc[s.index,'Выручка']))}
+    ).reset_index()
 
     fig_rev = px.line(weekly_cat, x='Неделя', y='Выручка', color='Категория',
                       markers=True, title="Выручка по неделям (категории)")
@@ -104,11 +93,10 @@ def main():
     fig_waste.update_layout(height=400)
     st.plotly_chart(fig_waste, use_container_width=True)
 
-    # ——— Heatmap always ———
+    # Heatmap всегда
     st.subheader(f"🗺 Heatmap выручки: неделя {sel_week}")
     df_h = df[df['Неделя']==sel_week]
     heat = df_h.pivot_table(index='Категория', columns='DayOfWeek', values='Выручка', aggfunc='sum').fillna(0)
-    # normalize per row
     norm = heat.sub(heat.min(axis=1), axis=0).div(heat.max(axis=1)-heat.min(axis=1), axis=0).fillna(0.5)
     fig_heat = px.imshow(norm, labels=dict(x="День недели", y="Категория", color="Норм. выручка"),
                         x=norm.columns, y=norm.index,
@@ -117,24 +105,22 @@ def main():
     fig_heat.update_layout(height=600)
     st.plotly_chart(fig_heat, use_container_width=True)
 
-    # ——— Test analysis ———
-    st.sidebar.header("5. Анализ тестового периода")
+    # Анализ тестового периода
+    st.sidebar.header("4. Анализ тестового периода")
     test_mode = st.sidebar.checkbox("Включить анализ теста")
     if test_mode:
-        # exclude incomplete weeks: keep weeks with 7 distinct days
         complete = df.groupby('Неделя')['DayOfWeek'].nunique()==7
-        full_weeks = complete[complete].index.tolist()
-        weekly_full = df[df['Неделя'].isin(full_weeks)].groupby('Неделя').apply(lambda g: pd.Series({
-            'revenue_sum': g['Выручка'].sum(),
-            'waste_avg': np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
-        })).reset_index()
+        weekly_full = df[df['Неделя'].isin(complete[complete].index)].groupby('Неделя').apply(
+            lambda g: pd.Series({'revenue_sum':g['Выручка'].sum(),
+                                'waste_avg':np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])})
+        ).reset_index()
         weekly_full['net_sum'] = weekly_full['revenue_sum']*(1-weekly_full['waste_avg']/100)
 
-        all_weeks_full = sorted(weekly_full['Неделя'])
-        test_week = st.sidebar.selectbox("Начальная неделя теста", all_weeks_full, index=len(all_weeks_full)-1)
+        all_full = sorted(weekly_full['Неделя'])
+        test_week = st.sidebar.selectbox("Начальная неделя теста", all_full, index=len(all_full)-1)
 
         pre = weekly_full[weekly_full['Неделя']<test_week]
-        post = weekly_full[weekly_full['Неделя']>=test_week]
+        post= weekly_full[weekly_full['Неделя']>=test_week]
         rev_pre, rev_post = pre['revenue_sum'].mean(), post['revenue_sum'].mean()
         waste_pre, waste_post = pre['waste_avg'].mean(), post['waste_avg'].mean()
         net_pre, net_post = pre['net_sum'].mean(), post['net_sum'].mean()
@@ -156,19 +142,7 @@ def main():
         fig2.update_layout(height=400)
         st.plotly_chart(fig2, use_container_width=True)
 
-        # normalized heatmap for test_week
-        df_ht = df[df['Неделя']==test_week]
-        heat_t = df_ht.pivot(index='Категория', columns='DayOfWeek', values='Выручка').fillna(0)
-        norm_t = heat_t.sub(heat_t.min(axis=1), axis=0).div(heat_t.max(axis=1)-heat_t.min(axis=1), axis=0).fillna(0.5)
-        st.subheader(f"🗺 Heatmap тест. недели {test_week}")
-        fig_ht = px.imshow(norm_t, labels=dict(x="День недели", y="Категория", color="Норм. выручка"),
-                          x=norm_t.columns, y=norm_t.index,
-                          color_continuous_scale=[(0,'red'),(0.5,'white'),(1,'green')])
-        fig_ht.update_traces(xgap=1, ygap=1)
-        fig_ht.update_layout(height=600)
-        st.plotly_chart(fig_ht, use_container_width=True)
-
-    # ——— Export ———
+    # Экспорт
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name='raw', index=False)
@@ -176,7 +150,6 @@ def main():
         norm.to_excel(writer, sheet_name=f'heat_{sel_week}', index=True)
         if test_mode:
             weekly_full.to_excel(writer, sheet_name='trend_test', index=False)
-            norm_t.to_excel(writer, sheet_name=f'heat_test_{test_week}', index=True)
     buf.seek(0)
     st.download_button("💾 Скачать отчёт (Excel)", buf,
                        "dashboard.xlsx",
