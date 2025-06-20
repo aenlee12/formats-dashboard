@@ -46,18 +46,17 @@ def prepare_data(files):
         df_share['Доля списаний и ЗЦ'] *= 100
     # Выручка в числа
     df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)
-    # Мёржим
+    # Сливаем
     return pd.merge(df_share, df_rev, on=['Категория','Неделя','DayOfWeek'], how='inner')
 
 
 def main():
     st.title("📊 Дашборд форматов: анализ и тестирование")
 
-    # Загрузка данных
+    # 1. Загрузка данных
     st.sidebar.header("1. Загрузка данных")
     files = st.sidebar.file_uploader(
-        "Загрузите два файла:\n• Доля списаний и ЗЦ\n• Выручка",
-        type=['csv','xlsx'], accept_multiple_files=True)
+        "Загрузите два файла:\n• Доля списаний и ЗЦ\n• Выручка", type=['csv','xlsx'], accept_multiple_files=True)
     if len(files) != 2:
         st.sidebar.info("Нужно загрузить ровно два файла.")
         return
@@ -67,23 +66,23 @@ def main():
         st.sidebar.error(e)
         return
 
-    # Базовые вычисления
+    # 2. Базовые вычисления
     df['avg_rev_week'] = df.groupby('Неделя')['Выручка'].transform('mean')
     df['rev_pct']      = df['Выручка'] / df['avg_rev_week'] * 100
 
-    # Фильтры
+    # 3. Фильтры
     st.sidebar.header("2. Фильтры")
     cats  = st.sidebar.multiselect("Категории", sorted(df['Категория'].unique()))
     weeks = st.sidebar.multiselect("Недели",    sorted(df['Неделя'].unique()))
     if cats:  df = df[df['Категория'].isin(cats)]
     if weeks: df = df[df['Неделя'].isin(weeks)]
 
-    # Heatmap по неделям
+    # 4. Heatmap по неделям
     st.sidebar.header("3. Heatmap неделя")
     all_weeks = sorted(df['Неделя'].unique())
     sel_week = st.sidebar.selectbox("Неделя для Heatmap", all_weeks, index=len(all_weeks)-1)
 
-    # Общие тренды по категориям
+    # 5. Общие тренды по категориям
     st.subheader("📈 Общие тренды по категориям")
     weekly_cat = df.groupby(['Неделя','Категория']).agg(
         {'Выручка':'sum',
@@ -100,11 +99,10 @@ def main():
     fig_waste.update_layout(height=400)
     st.plotly_chart(fig_waste, use_container_width=True)
 
-    # Heatmap выручки (реальные значения + цвет по нормализации внутри категории)
+    # Heatmap выручки реальными значениями и цветом по нормализации в рамках категории
     st.subheader(f"🗺 Heatmap выручки по дням недели (неделя {sel_week})")
     df_h = df[df['Неделя']==sel_week]
     heat = df_h.pivot_table(index='Категория', columns='DayOfWeek', values='Выручка', aggfunc='sum').fillna(0)
-    # нормализация для цвета
     heat_norm = heat.div(heat.max(axis=1), axis=0).fillna(0)
     fig_heat = px.imshow(
         heat_norm,
@@ -112,7 +110,7 @@ def main():
         x=heat_norm.columns, y=heat_norm.index,
         color_continuous_scale=['red','white','green']
     )
-    # Добавляем текст аннотации с реальными значениями
+    # текст аннотаций и ховер
     fig_heat.data[0].text = heat.values.tolist()
     fig_heat.data[0].texttemplate = "%{text:.0f}"
     fig_heat.data[0].hovertemplate = 'Категория=%{y}<br>День=%{x}<br>Выручка=%{text:.0f}<extra></extra>'
@@ -129,34 +127,41 @@ def main():
         test_week = st.sidebar.selectbox("Начальная неделя теста", all_weeks, index=len(all_weeks)-1)
         test_day  = st.sidebar.selectbox("Начальный день теста", days, format_func=lambda d: day_map[d])
 
-        # Определение полных недель
+        # Определяем полные недели (по числу уникальных дней)
         complete = df.groupby('Неделя')['DayOfWeek'].nunique() == len(days)
         full_weeks = complete[complete].index
         df_full = df[df['Неделя'].isin(full_weeks)]
 
-        # Разбиение на периоды (только полные недели)
-        pre_mask = (df_full['Неделя'] < test_week) | ((df_full['Неделя']==test_week) & (df_full['DayOfWeek'] < test_day))
-        post_mask= (df_full['Неделя'] > test_week) | ((df_full['Неделя']==test_week) & (df_full['DayOfWeek'] >= test_day))
+        # Разделяем на до и во время теста (только полные недели)
+        pre_mask  = (df_full['Неделя'] < test_week) | ((df_full['Неделя']==test_week) & (df_full['DayOfWeek'] < test_day))
+        post_mask = (df_full['Неделя'] > test_week) | ((df_full['Неделя']==test_week) & (df_full['DayOfWeek'] >= test_day))
         df_pre  = df_full[pre_mask]
         df_post = df_full[post_mask]
 
-        # Усреднённая аналитика
-        rev_pre   = df_pre['Выручка'].mean()
-        rev_post  = df_post['Выручка'].mean()
-        waste_pre = np.average(df_pre['Доля списаний и ЗЦ'], weights=df_pre['Выручка'])
-        waste_post= np.average(df_post['Доля списаний и ЗЦ'], weights=df_post['Выручка'])
-        net_pre   = np.mean(df_pre['Выручка'] * (1 - df_pre['Доля списаний и ЗЦ']/100))
-        net_post  = np.mean(df_post['Выручка'] * (1 - df_post['Доля списаний и ЗЦ']/100))
+        # Выручка: средние
+        rev_pre  = df_pre['Выручка'].mean() if not df_pre.empty else np.nan
+        rev_post = df_post['Выручка'].mean() if not df_post.empty else np.nan
+
+        # Сумма выручки для весов
+        sum_rev_pre  = df_pre['Выручка'].sum()
+        sum_rev_post = df_post['Выручка'].sum()
+        # % списаний: средневзвешенное
+        waste_pre  = np.average(df_pre['Доля списаний и ЗЦ'], weights=df_pre['Выручка']) if sum_rev_pre>0 else np.nan
+        waste_post = np.average(df_post['Доля списаний и ЗЦ'], weights=df_post['Выручка']) if sum_rev_post>0 else np.nan
+
+        # Чистая выручка: среднее (weighted)
+        net_pre  = (df_pre['Выручка']*(1-df_pre['Доля списаний и ЗЦ']/100)).sum()/sum_rev_pre if sum_rev_pre>0 else np.nan
+        net_post = (df_post['Выручка']*(1-df_post['Доля списаний и ЗЦ']/100)).sum()/sum_rev_post if sum_rev_post>0 else np.nan
 
         st.subheader("📋 Усреднённая аналитика до/во время теста (только полные недели)")
         st.markdown(f"""
 - **Выручка (среднее)**: {rev_pre:.0f} → {rev_post:.0f} ₽ ({(rev_post/rev_pre-1)*100:.1f}% изменения)
-- **% списаний (среднее)**: {waste_pre:.1f}% → {waste_post:.1f}% ({(waste_post-waste_pre):+.1f} п.п.)
-- **Чистая выручка (среднее)**: {net_pre:.0f} → {net_post:.0f} ₽ ({(net_post/net_pre-1)*100:.1f}% изменения)
+- **% списаний (средневзвешенное)**: {waste_pre:.1f}% → {waste_post:.1f}% ({(waste_post-waste_pre):+.1f} п.п.)
+- **Чистая выручка (weighted)**: {net_pre:.0f} → {net_post:.0f} ₽ ({(net_post/net_pre-1)*100:.1f}% изменения)
 """
         )
 
-        # График общей выручки по неделям
+        # Общий тренд выручки по неделям (полные недели)
         weekly_sum = df_full.groupby('Неделя')['Выручка'].sum().reset_index()
         fig_total_rev = px.line(weekly_sum, x='Неделя', y='Выручка', markers=True,
                                 title="Общая выручка по полным неделям")
@@ -164,7 +169,7 @@ def main():
         fig_total_rev.update_layout(height=400)
         st.plotly_chart(fig_total_rev, use_container_width=True)
 
-        # График среднего % списаний по неделям
+        # Общий % списаний по неделям
         weekly_waste = df_full.groupby('Неделя').apply(
             lambda g: np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
         ).reset_index(name='Среднее % списаний')
@@ -174,7 +179,7 @@ def main():
         fig_total_waste.update_layout(height=400)
         st.plotly_chart(fig_total_waste, use_container_width=True)
 
-    # Экспорт данных
+    # 6. Экспорт данных
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name='raw', index=False)
