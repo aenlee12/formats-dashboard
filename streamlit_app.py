@@ -41,7 +41,7 @@ def prepare_data(files):
     # перевести дробные значения (0-1) в проценты
     df_share['Доля списаний и ЗЦ'] = df_share['Доля списаний и ЗЦ'].apply(lambda x: x * 100 if x <= 1 else x)
     # Выручка в числа
-    df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)(df_rev['Выручка'], errors='coerce').fillna(0)
+    df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)
     return pd.merge(df_share, df_rev, on=['Категория','Неделя','DayOfWeek'], how='inner')
 
 
