@@ -104,11 +104,15 @@ def main():
     st.subheader(f"🗺 Heatmap выручки по дням недели (неделя {sel_week})")
     df_h = df[df['Неделя']==sel_week]
     heat = df_h.pivot_table(index='Категория', columns='DayOfWeek', values='Выручка', aggfunc='sum').fillna(0)
-    # raw sums heatmap
-    fig_heat = px.imshow(heat,
-                        labels=dict(x="День недели", y="Категория", color="Сумма выручки"),
-                        x=heat.columns, y=heat.index,
-                        color_continuous_scale="Viridis")
+    # нормализация по каждой категории
+    heat_norm = heat.div(heat.max(axis=1), axis=0).fillna(0)
+    fig_heat = px.imshow(
+        heat_norm,
+        labels=dict(x="День недели", y="Категория", color="Нормал. выручка"),
+        x=heat_norm.columns, y=heat_norm.index,
+        color_continuous_scale=['red','white','green'],
+        title="Heatmap выручки по дням недели (нормализовано по категории)"
+    )
     fig_heat.update_traces(xgap=1, ygap=1)
     fig_heat.update_layout(height=600)
     st.plotly_chart(fig_heat, use_container_width=True)
@@ -117,15 +121,17 @@ def main():
     st.sidebar.header("4. Анализ тестового периода")
     test_mode = st.sidebar.checkbox("Включить анализ теста")
     if test_mode:
-        # day names mapping numeric to text
         days = sorted(df['DayOfWeek'].unique())
-        day_map = {d:f"{d}-й" for d in days}  # можно заменить на "ПН, ВТ..."
+        day_map = {d:f"{d}-й" for d in days}
         test_week = st.sidebar.selectbox("Начальная неделя теста", all_weeks, index=len(all_weeks)-1)
         test_day  = st.sidebar.selectbox("Начальный день теста", days, format_func=lambda d: day_map[d])
 
         # полные недели
         complete = df.groupby('Неделя')['DayOfWeek'].nunique()==len(days)
-        weekly_full = df[df['Неделя'].isin(complete[complete].index)].groupby('Неделя').apply(
+        full_weeks = complete[complete].index
+
+        # общие метрики до/после
+        weekly_full = df[df['Неделя'].isin(full_weeks)].groupby('Неделя').apply(
             lambda g: pd.Series({
                 'Сумма выручки': g['Выручка'].sum(),
                 'Среднее % списаний': np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
@@ -133,7 +139,6 @@ def main():
         ).reset_index()
         weekly_full['Чистая выручка'] = weekly_full['Сумма выручки'] * (1 - weekly_full['Среднее % списаний']/100)
 
-        # разбивка по категориям pre/post
         pre = weekly_full[weekly_full['Неделя']<test_week]
         post= weekly_full[weekly_full['Неделя']>=test_week]
         rev_pre = pre['Сумма выручки'].mean(); rev_post = post['Сумма выручки'].mean()
@@ -145,29 +150,32 @@ def main():
 - **Выручка**: {rev_pre:.0f} → {rev_post:.0f} ₽ ({(rev_post/rev_pre-1)*100:.1f}%)
 - **% списаний**: {waste_pre:.1f}% → {waste_post:.1f}% ({waste_post-waste_pre:+.1f} п.п.)
 - **Чистая выручка**: {net_pre:.0f} → {net_post:.0f} ₽ ({(net_post/net_pre-1)*100:.1f}%)
-""")
-        # таблицы по категориям
-        cat_pre = df[(df['Неделя']<test_week)].groupby('Категория').agg(
-            {'Выручка':'sum','Доля списаний и ЗЦ': lambda s: np.average(s, weights=df.loc[s.index,'Выручка'])}
-        ).rename(columns={'Выручка':'Сумма выручки','Доля списаний и ЗЦ':'Средний % списаний'})
-        cat_post = df[(df['Неделя']>=test_week)].groupby('Категория').agg(
-            {'Выручка':'sum','Доля списаний и ЗЦ': lambda s: np.average(s, weights=df.loc[s.index,'Выручка'])}
-        ).rename(columns={'Выручка':'Сумма выручки','Доля списаний и ЗЦ':'Средний % списаний'})
-        st.markdown("**По категориям до теста**")
-        st.dataframe(cat_pre, use_container_width=True)
-        st.markdown("**По категориям после теста**")
-        st.dataframe(cat_post, use_container_width=True)
+"""
+        )
 
-        # тренды теста
-        fig1 = px.line(weekly_full, x='Неделя', y='Сумма выручки', markers=True, title="Выручка тестовых недель")
-        fig1.add_vline(x=test_week, line_color='red', line_dash='dash')
-        fig1.update_layout(height=400)
-        st.plotly_chart(fig1, use_container_width=True)
+        # графики тестовых недель по категориям
+        weekly_full_cat = df[df['Неделя'].isin(full_weeks)].groupby(['Неделя','Категория']).apply(
+            lambda g: pd.Series({
+                'Сумма выручки': g['Выручка'].sum(),
+                'Среднее % списаний': np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
+            })
+        ).reset_index()
 
-        fig2 = px.line(weekly_full, x='Неделя', y='Среднее % списаний', markers=True, title="% списаний тестовых недель")
-        fig2.add_vline(x=test_week, line_color='red', line_dash='dash')
-        fig2.update_layout(height=400)
-        st.plotly_chart(fig2, use_container_width=True)
+        fig_rev_cat = px.line(
+            weekly_full_cat, x='Неделя', y='Сумма выручки', color='Категория',
+            markers=True, title="Выручка тестовых недель по категориям"
+        )
+        fig_rev_cat.add_vline(x=test_week, line_color='red', line_dash='dash')
+        fig_rev_cat.update_layout(height=400)
+        st.plotly_chart(fig_rev_cat, use_container_width=True)
+
+        fig_waste_cat = px.line(
+            weekly_full_cat, x='Неделя', y='Среднее % списаний', color='Категория',
+            markers=True, title="% списаний тестовых недель по категориям"
+        )
+        fig_waste_cat.add_vline(x=test_week, line_color='red', line_dash='dash')
+        fig_waste_cat.update_layout(height=400)
+        st.plotly_chart(fig_waste_cat, use_container_width=True)
 
     # экспорт
     buf = BytesIO()
@@ -177,8 +185,7 @@ def main():
         heat.to_excel(writer, sheet_name=f'heat_{sel_week}', index=True)
         if test_mode:
             weekly_full.to_excel(writer, sheet_name='trend_test', index=False)
-            cat_pre.to_excel(writer, sheet_name='cat_pre', index=True)
-            cat_post.to_excel(writer, sheet_name='cat_post', index=True)
+            weekly_full_cat.to_excel(writer, sheet_name='trend_test_cat', index=False)
     buf.seek(0)
     st.download_button("💾 Скачать отчёт (Excel)", buf,
                        "dashboard.xlsx",
