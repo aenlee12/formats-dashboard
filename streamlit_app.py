@@ -8,184 +8,115 @@ st.set_page_config(page_title="Дашборд форматов", layout="wide")
 
 @st.cache_data
 def load_df(file):
-    """Загрузить CSV/Excel и переименовать колонки в стандартизированные."""
     if file.name.lower().endswith('.csv'):
         df = pd.read_csv(file)
     else:
         df = pd.read_excel(file, header=0)
-
-    # Сразу в нижний регистр для упрощённого поиска
     df.columns = df.columns.str.strip().str.lower()
-
     col_map = {}
-    for col in df.columns:
-        if 'категор' in col:
-            col_map[col] = 'Категория'
-        elif 'недел' in col:
-            col_map[col] = 'Неделя'
-        elif 'день' in col or 'dayofweek' in col:
-            col_map[col] = 'DayOfWeek'
-        elif 'доля' in col:
-            col_map[col] = 'Доля списаний и ЗЦ'
-        elif 'выруч' in col:
-            col_map[col] = 'Выручка'
-
+    for c in df.columns:
+        if 'категор' in c:        col_map[c] = 'Категория'
+        elif 'недел' in c:        col_map[c] = 'Неделя'
+        elif 'день' in c:         col_map[c] = 'DayOfWeek'
+        elif 'доля' in c:         col_map[c] = 'Доля списаний и ЗЦ'
+        elif 'выруч' in c:        col_map[c] = 'Выручка'
     return df.rename(columns=col_map)
 
 @st.cache_data
 def prepare_data(files):
-    """Из двух файлов (доля списаний и выручка) собрать один DataFrame."""
     df_share = df_rev = None
-
     for f in files:
         df = load_df(f)
-        # Ищем уже стандартизированные имена
-        if 'Доля списаний и ЗЦ' in df.columns:
+        if 'доля списаний и зц' in df.columns:
             df_share = df[['Категория','Неделя','DayOfWeek','Доля списаний и ЗЦ']].copy()
-        elif 'Выручка' in df.columns:
+        elif 'выручка' in df.columns:
             df_rev = df[['Категория','Неделя','DayOfWeek','Выручка']].copy()
-
     if df_share is None or df_rev is None:
-        raise ValueError(
-            "Нужно загрузить ровно два файла:\n"
-            "• один с колонкой «Доля списаний и ЗЦ»\n"
-            "• второй с колонкой «Выручка»"
-        )
-
-    # Приводим % к числу
+        raise ValueError("Нужно загрузить два файла: один с «Доля списаний и ЗЦ», второй с «Выручка»")
     s = df_share['Доля списаний и ЗЦ'].astype(str).str.replace(',', '.').str.rstrip('%')
     df_share['Доля списаний и ЗЦ'] = pd.to_numeric(s, errors='coerce').fillna(0)
-
-    # Приводим выручку к числу
     df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)
-
-    # Объединяем
-    return pd.merge(
-        df_share, df_rev,
-        on=['Категория','Неделя','DayOfWeek'],
-        how='inner'
-    )
+    return pd.merge(df_share, df_rev, on=['Категория','Неделя','DayOfWeek'], how='inner')
 
 def main():
-    st.title("📊 Дашборд форматов: Жук и Тест")
-
-    st.sidebar.header("1. Загрузка файлов")
-    files = st.sidebar.file_uploader(
-        "Загрузите два файла:\n"
-        "• «Доля списаний и ЗЦ»\n"
-        "• «Выручка»",
-        type=['csv','xlsx'], accept_multiple_files=True
-    )
+    st.title("📊 Дашборд форматов: общий анализ")
+    files = st.sidebar.file_uploader("Загрузите два файла: % списаний и Выручка", type=['csv','xlsx'], accept_multiple_files=True)
     if len(files) != 2:
-        st.sidebar.info("Пожалуйста, выберите ровно два файла.")
+        st.sidebar.info("Нужно загрузить ровно два файла.")
         return
-
     try:
         df = prepare_data(files)
     except Exception as e:
-        st.sidebar.error(str(e))
+        st.sidebar.error(e)
         return
 
-    # Вычисляем относительную выручку
     df['avg_rev_week'] = df.groupby('Неделя')['Выручка'].transform('mean')
-    df['rev_pct']      = df['Выручка'] / df['avg_rev_week'] * 100
+    df['rev_pct'] = df['Выручка'] / df['avg_rev_week'] * 100
 
-    # Фильтры
-    st.sidebar.header("2. Фильтры")
-    cats  = st.sidebar.multiselect("Категории", sorted(df['Категория'].unique()), default=None)
-    weeks = st.sidebar.multiselect("Недели",    sorted(df['Неделя'].unique()),     default=None)
-    if cats:
-        df = df[df['Категория'].isin(cats)]
-    if weeks:
-        df = df[df['Неделя'].isin(weeks)]
+    st.sidebar.header("Фильтры")
+    cats = st.sidebar.multiselect("Категории", sorted(df['Категория'].unique()), default=None)
+    weeks = st.sidebar.multiselect("Недели", sorted(df['Неделя'].unique()), default=None)
+    if cats: df = df[df['Категория'].isin(cats)]
+    if weeks: df = df[df['Неделя'].isin(weeks)]
 
-    # Пороги для подсветки
-    st.sidebar.header("3. Пороги подсветки")
+    st.sidebar.header("Настройки теста")
+    test_week = st.sidebar.selectbox("Начальная неделя теста", sorted(df['Неделя'].unique()), index=len(df['Неделя'].unique())-1)
+    test_day = st.sidebar.selectbox("Начальный день недели теста", sorted(df['DayOfWeek'].unique()), index=0)
+
+    st.sidebar.header("Пороги подсветки")
     share_thr = st.sidebar.slider("Порог % списаний", 0.0, 100.0, 20.0)
-    rev_thr   = st.sidebar.slider("Мин. % выручки от среднего", 0.0, 200.0, 80.0)
+    rev_thr = st.sidebar.slider("Мин. % выручки от среднего", 0.0, 200.0, 80.0)
 
-    # Выбор недели для Heatmap
-    st.sidebar.header("4. Heatmap неделя")
-    last_week = int(df['Неделя'].max())
-    sel_week  = st.sidebar.selectbox(
-        "Выберите неделю для Heatmap",
-        options=sorted(df['Неделя'].unique()),
-        index=sorted(df['Неделя'].unique()).index(last_week)
-    )
+    # Metrics comparison pre-test vs test
+    weekly = df.groupby('Неделя').apply(lambda g: pd.Series({
+        'revenue': g['Выручка'].sum(),
+        'waste_avg': np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка']) if g['Выручка'].sum()>0 else g['Доля списаний и ЗЦ'].mean()
+    })).reset_index()
+    pre = weekly[weekly['Неделя']<test_week]
+    post = weekly[weekly['Неделя']>=test_week]
+    rev_pre = pre['revenue'].mean() if not pre.empty else 0
+    rev_post = post['revenue'].mean() if not post.empty else 0
+    waste_pre = pre['waste_avg'].mean() if not pre.empty else 0
+    waste_post = post['waste_avg'].mean() if not post.empty else 0
+    net_pre = rev_pre*(1-waste_pre/100)
+    net_post = rev_post*(1-waste_post/100)
 
-    # ----------------------------------------------------------------
-    # 1) Таблица по [Неделя × ДеньOfWeek]
-    st.subheader("📅 Таблица: Неделя × День недели")
-    pivot = df.pivot_table(
-        index=['Неделя','DayOfWeek'],
-        columns='Категория',
-        values=['Доля списаний и ЗЦ','rev_pct'],
-        aggfunc='mean'
-    )
-    # распрямляем MultiIndex
-    flat = [f"{metric}_{cat}" for metric,cat in pivot.columns]
-    pivot.columns = flat
+    st.subheader("📋 Результаты тестового периода")
+    st.markdown(f"""
+- **Средняя выручка**: {rev_pre:.0f} → {rev_post:.0f} ₽ ({(rev_post/rev_pre-1)*100:.1f}%)
+- **Средний % списаний**: {waste_pre:.1f}% → {waste_post:.1f}% ({waste_pre-waste_post:.1f} п.п.)
+- **Средняя чистая выручка**: {net_pre:.0f} → {net_post:.0f} ₽ ({(net_post/net_pre-1)*100:.1f}%)
+""")
 
-    waste_cols   = [c for c in flat if c.startswith('Доля списаний и ЗЦ_')]
-    rev_pct_cols = [c for c in flat if c.startswith('rev_pct_')]
-
-    styled = pivot.style.format("{:.1f}") \
-        .applymap(lambda v: 'background-color: tomato' if v>=share_thr else '', subset=waste_cols) \
-        .applymap(lambda v: 'background-color: tomato' if v<=rev_thr   else '', subset=rev_pct_cols)
-
-    st.dataframe(styled, use_container_width=True)
-
-    # ----------------------------------------------------------------
-    # 2) Линейные тренды по неделям
-    st.subheader("📈 Тренды по неделям")
-    wk = df.groupby(['Неделя','Категория']).agg({
-        'Выручка': 'sum',
-        'Доля списаний и ЗЦ': lambda s: np.average(s, weights=df.loc[s.index,'Выручка'])
-                                       if df.loc[s.index,'Выручка'].sum()>0 else s.mean()
-    }).reset_index()
-
-    fig_rev = px.line(wk, x='Неделя', y='Выручка', color='Категория',
-                      markers=True, title="Суммарная выручка по неделям")
-    fig_rev.update_layout(height=500)
+    # Line charts with test start marker
+    st.subheader("🚀 Тренды по неделям")
+    fig_rev = px.line(weekly, x='Неделя', y='revenue', markers=True, title="Выручка по неделям")
+    fig_rev.add_vline(x=test_week, line_color='red', line_dash='dash', annotation_text="Тест начался")
+    fig_rev.update_layout(height=400)
     st.plotly_chart(fig_rev, use_container_width=True)
 
-    fig_waste = px.line(wk, x='Неделя', y='Доля списаний и ЗЦ', color='Категория',
-                        markers=True, title="Средневзвешенный % списаний по неделям")
-    fig_waste.update_layout(height=500)
+    fig_waste = px.line(weekly, x='Неделя', y='waste_avg', markers=True, title="% списаний по неделям")
+    fig_waste.add_vline(x=test_week, line_color='red', line_dash='dash')
+    fig_waste.update_layout(height=400)
     st.plotly_chart(fig_waste, use_container_width=True)
 
-    # ----------------------------------------------------------------
-    # 3) Heatmap за выбранную неделю
-    st.subheader(f"🗺 Heatmap выручки: Неделя {sel_week}")
-    df_h = df[df['Неделя']==sel_week]
-    heat = df_h.pivot_table(
-        index='Категория',
-        columns='DayOfWeek',
-        values='Выручка',
-        aggfunc='sum'
-    )
-
-    fig_heat = px.imshow(
-        heat,
-        labels=dict(x="День недели", y="Категория", color="Выручка"),
-        aspect="auto",
-        color_continuous_scale="Viridis"
-    )
+    # Heatmap for selected week
+    st.subheader(f"🗺 Heatmap выручки: неделя {test_week}")
+    df_h = df[df['Неделя']==test_week]
+    heat = df_h.pivot_table(index='Категория', columns='DayOfWeek', values='Выручка', aggfunc='sum')
+    fig_heat = px.imshow(heat, labels=dict(x="День недели", y="Категория", color="Выручка"), aspect="auto", color_continuous_scale="Viridis")
     fig_heat.update_traces(xgap=1, ygap=1)
-    fig_heat.update_layout(height=700)
+    fig_heat.update_layout(height=500)
     st.plotly_chart(fig_heat, use_container_width=True)
 
-    # ----------------------------------------------------------------
-    # Экспорт
+    # Export
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name='raw_data', index=False)
-        wk.to_excel(writer, sheet_name='trend_by_week', index=False)
-        heat.to_excel(writer, sheet_name=f'heatmap_week_{sel_week}', index=True)
+        df.to_excel(writer, sheet_name='raw', index=False)
+        weekly.to_excel(writer, sheet_name='weekly', index=False)
+        heat.to_excel(writer, sheet_name=f'heat_{test_week}', index=True)
     buf.seek(0)
-    st.download_button("💾 Скачать отчёт (Excel)", buf,
-                       "formats_dashboard.xlsx",
-                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("💾 Скачать отчёт (Excel)", buf, "dashboard.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 if __name__ == "__main__":
     main()
