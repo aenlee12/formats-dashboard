@@ -4,12 +4,11 @@ import numpy as np
 import plotly.express as px
 from io import BytesIO
 
-# Настройки страницы
+# Page config
 st.set_page_config(page_title="Дашборд форматов", layout="wide")
 
 @st.cache_data
 def load_df(file):
-    """Загрузить CSV или Excel и привести названия колонок к стандартным."""
     if file.name.lower().endswith('.csv'):
         df = pd.read_csv(file)
     else:
@@ -26,7 +25,6 @@ def load_df(file):
 
 @st.cache_data
 def prepare_data(files):
-    """Собрать один DataFrame из двух файлов."""
     df_share = df_rev = None
     info = []
     for f in files:
@@ -38,21 +36,17 @@ def prepare_data(files):
             df_rev   = df[['Категория','Неделя','DayOfWeek','Выручка']].copy()
     if df_share is None or df_rev is None:
         details = "\n".join(f"{n}: {cols}" for n,cols in info)
-        raise ValueError(f"Нужны колонки «Доля списаний и ЗЦ» и «Выручка».\n{details}")
-    # Приводим проценты к числу
+        raise ValueError(f"Не найдены колонки «Доля списаний и ЗЦ» и «Выручка».\n{details}")
     s = df_share['Доля списаний и ЗЦ'].astype(str).str.replace(',', '.').str.rstrip('%')
     df_share['Доля списаний и ЗЦ'] = pd.to_numeric(s, errors='coerce').fillna(0)
     if df_share['Доля списаний и ЗЦ'].max() <= 1:
         df_share['Доля списаний и ЗЦ'] *= 100
-    # Выручка в числа
     df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)
-    # Мёржим
     return pd.merge(df_share, df_rev, on=['Категория','Неделя','DayOfWeek'], how='inner')
 
 def main():
     st.title("📊 Дашборд форматов: анализ и тестирование")
 
-    # загрузка
     st.sidebar.header("1. Загрузка данных")
     files = st.sidebar.file_uploader(
         "Загрузите два файла:\n• «Доля списаний и ЗЦ»\n• «Выручка»",
@@ -66,18 +60,15 @@ def main():
         st.sidebar.error(e)
         return
 
-    # вычисления
     df['avg_rev_week'] = df.groupby('Неделя')['Выручка'].transform('mean')
     df['rev_pct']      = df['Выручка'] / df['avg_rev_week'] * 100
 
-    # фильтры
     st.sidebar.header("2. Фильтры")
-    cats  = st.sidebar.multiselect("Категории", sorted(df['Категория'].unique()))
-    weeks = st.sidebar.multiselect("Недели",    sorted(df['Неделя'].unique()))
-    if cats:  df = df[df['Категория'].isin(cats)]
+    cats = st.sidebar.multiselect("Категории", sorted(df['Категория'].unique()))
+    weeks = st.sidebar.multiselect("Недели", sorted(df['Неделя'].unique()))
+    if cats: df = df[df['Категория'].isin(cats)]
     if weeks: df = df[df['Неделя'].isin(weeks)]
 
-    # heatmap неделя
     st.sidebar.header("3. Heatmap неделя")
     all_weeks = sorted(df['Неделя'].unique())
     sel_week = st.sidebar.selectbox("Неделя для Heatmap", all_weeks, index=len(all_weeks)-1)
@@ -87,89 +78,81 @@ def main():
     weekly_cat = df.groupby(['Неделя','Категория']).agg(
         {'Выручка':'sum',
          'Доля списаний и ЗЦ': lambda s: np.average(s, weights=df.loc[s.index,'Выручка'])}
-    ).reset_index().rename(columns={'Доля списаний и ЗЦ':'Среднее % списаний',
-                                    'Выручка':'Сумма выручки'})
+    ).reset_index().rename(columns={'Выручка':'Сумма выручки','Доля списаний и ЗЦ':'Средний % списаний'})
 
-    fig_rev = px.line(weekly_cat, x='Неделя', y='Сумма выручки', color='Категория',
-                      markers=True, title="Сумма выручки по неделям и категориям")
-    fig_rev.update_layout(height=400)
+    fig_rev = px.line(
+        weekly_cat, x='Неделя', y='Сумма выручки', color='Категория',
+        markers=True, title="Сумма выручки по неделям и категориям"
+    ).update_layout(height=400)
     st.plotly_chart(fig_rev, use_container_width=True)
 
-    fig_waste = px.line(weekly_cat, x='Неделя', y='Среднее % списаний', color='Категория',
-                        markers=True, title="Средний % списаний по неделям и категориям")
-    fig_waste.update_layout(height=400)
+    fig_waste = px.line(
+        weekly_cat, x='Неделя', y='Средний % списаний', color='Категория',
+        markers=True, title="Средний % списаний по неделям и категориям"
+    ).update_layout(height=400)
     st.plotly_chart(fig_waste, use_container_width=True)
 
-    # heatmap всегда
+    # Heatmap всегда
     st.subheader(f"🗺 Heatmap выручки по дням недели (неделя {sel_week})")
     df_h = df[df['Неделя']==sel_week]
     heat = df_h.pivot_table(index='Категория', columns='DayOfWeek', values='Выручка', aggfunc='sum').fillna(0)
-    # raw sums heatmap
-    fig_heat = px.imshow(heat,
-                        labels=dict(x="День недели", y="Категория", color="Сумма выручки"),
-                        x=heat.columns, y=heat.index,
-                        color_continuous_scale="Viridis")
+    # normalize per category row
+    norm = heat.sub(heat.min(axis=1), axis=0).div(heat.max(axis=1)-heat.min(axis=1), axis=0).fillna(0.5)
+    fig_heat = px.imshow(
+        norm,
+        labels=dict(x="День недели", y="Категория", color="Норм. выручка"),
+        x=norm.columns, y=norm.index,
+        color_continuous_scale=[(0,'red'),(0.5,'white'),(1,'green')]
+    )
     fig_heat.update_traces(xgap=1, ygap=1)
     fig_heat.update_layout(height=600)
     st.plotly_chart(fig_heat, use_container_width=True)
 
-    # анализ теста
+    # Анализ тестового периода
     st.sidebar.header("4. Анализ тестового периода")
     test_mode = st.sidebar.checkbox("Включить анализ теста")
     if test_mode:
-        # day names mapping numeric to text
-        days = sorted(df['DayOfWeek'].unique())
-        day_map = {d:f"{d}-й" for d in days}  # можно заменить на "ПН, ВТ..."
-        test_week = st.sidebar.selectbox("Начальная неделя теста", all_weeks, index=len(all_weeks)-1)
-        test_day  = st.sidebar.selectbox("Начальный день теста", days, format_func=lambda d: day_map[d])
-
-        # полные недели
-        complete = df.groupby('Неделя')['DayOfWeek'].nunique()==len(days)
+        complete = df.groupby('Неделя')['DayOfWeek'].nunique()==df['DayOfWeek'].nunique()
         weekly_full = df[df['Неделя'].isin(complete[complete].index)].groupby('Неделя').apply(
             lambda g: pd.Series({
                 'Сумма выручки': g['Выручка'].sum(),
-                'Среднее % списаний': np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
+                'Средний % списаний': np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
             })
         ).reset_index()
-        weekly_full['Чистая выручка'] = weekly_full['Сумма выручки'] * (1 - weekly_full['Среднее % списаний']/100)
+        weekly_full['Чистая выручка'] = weekly_full['Сумма выручки'] * (1 - weekly_full['Средний % списаний']/100)
 
-        # разбивка по категориям pre/post
+        all_full = sorted(weekly_full['Неделя'])
+        test_week = st.sidebar.selectbox("Начальная неделя теста", all_full, index=len(all_full)-1)
+        # day selector
+        days = sorted(df['DayOfWeek'].unique())
+        day_map = {d: ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"][d-1] if 1<=d<=7 else str(d) for d in days}
+        test_day = st.sidebar.selectbox("Начальный день теста", days, format_func=lambda d: day_map[d])
+
         pre = weekly_full[weekly_full['Неделя']<test_week]
-        post= weekly_full[weekly_full['Неделя']>=test_week]
-        rev_pre = pre['Сумма выручки'].mean(); rev_post = post['Сумма выручки'].mean()
-        waste_pre = pre['Среднее % списаний'].mean(); waste_post = post['Среднее % списаний'].mean()
-        net_pre = pre['Чистая выручка'].mean(); net_post = post['Чистая выручка'].mean()
+        post = weekly_full[weekly_full['Неделя']>=test_week]
+        # Combined metric comparison (omitted here if only graphs)
+        # Graphs by category pre/post
+        cat_comp = df.copy()
+        cat_comp['Период'] = np.where(cat_comp['Неделя']<test_week, 'До теста','После теста')
+        comp = cat_comp.groupby(['Категория','Период']).agg({
+            'Выручка':'sum',
+            'Доля списаний и ЗЦ': lambda s: np.average(s, weights=cat_comp.loc[s.index,'Выручка'])
+        }).reset_index().rename(columns={'Выручка':'Сумма выручки','Доля списаний и ЗЦ':'Средний % списаний'})
 
-        st.subheader("📋 Сравнение до/после теста")
-        st.markdown(f"""
-- **Выручка**: {rev_pre:.0f} → {rev_post:.0f} ₽ ({(rev_post/rev_pre-1)*100:.1f}%)
-- **% списаний**: {waste_pre:.1f}% → {waste_post:.1f}% ({waste_post-waste_pre:+.1f} п.п.)
-- **Чистая выручка**: {net_pre:.0f} → {net_post:.0f} ₽ ({(net_post/net_pre-1)*100:.1f}%)
-""")
-        # таблицы по категориям
-        cat_pre = df[(df['Неделя']<test_week)].groupby('Категория').agg(
-            {'Выручка':'sum','Доля списаний и ЗЦ': lambda s: np.average(s, weights=df.loc[s.index,'Выручка'])}
-        ).rename(columns={'Выручка':'Сумма выручки','Доля списаний и ЗЦ':'Средний % списаний'})
-        cat_post = df[(df['Неделя']>=test_week)].groupby('Категория').agg(
-            {'Выручка':'sum','Доля списаний и ЗЦ': lambda s: np.average(s, weights=df.loc[s.index,'Выручка'])}
-        ).rename(columns={'Выручка':'Сумма выручки','Доля списаний и ЗЦ':'Средний % списаний'})
-        st.markdown("**По категориям до теста**")
-        st.dataframe(cat_pre, use_container_width=True)
-        st.markdown("**По категориям после теста**")
-        st.dataframe(cat_post, use_container_width=True)
+        st.subheader("📊 Сравнение по категориям")
+        fig_cat_rev = px.bar(
+            comp, x='Категория', y='Сумма выручки', color='Период',
+            barmode='group', title="Выручка до/после теста по категориям"
+        ).update_layout(height=400)
+        st.plotly_chart(fig_cat_rev, use_container_width=True)
 
-        # тренды теста
-        fig1 = px.line(weekly_full, x='Неделя', y='Сумма выручки', markers=True, title="Выручка тестовых недель")
-        fig1.add_vline(x=test_week, line_color='red', line_dash='dash')
-        fig1.update_layout(height=400)
-        st.plotly_chart(fig1, use_container_width=True)
+        fig_cat_waste = px.bar(
+            comp, x='Категория', y='Средний % списаний', color='Период',
+            barmode='group', title="% списаний до/после теста по категориям"
+        ).update_layout(height=400)
+        st.plotly_chart(fig_cat_waste, use_container_width=True)
 
-        fig2 = px.line(weekly_full, x='Неделя', y='Среднее % списаний', markers=True, title="% списаний тестовых недель")
-        fig2.add_vline(x=test_week, line_color='red', line_dash='dash')
-        fig2.update_layout(height=400)
-        st.plotly_chart(fig2, use_container_width=True)
-
-    # экспорт
+    # Экспорт
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name='raw', index=False)
@@ -177,8 +160,7 @@ def main():
         heat.to_excel(writer, sheet_name=f'heat_{sel_week}', index=True)
         if test_mode:
             weekly_full.to_excel(writer, sheet_name='trend_test', index=False)
-            cat_pre.to_excel(writer, sheet_name='cat_pre', index=True)
-            cat_post.to_excel(writer, sheet_name='cat_post', index=True)
+            comp.to_excel(writer, sheet_name='cat_comp', index=False)
     buf.seek(0)
     st.download_button("💾 Скачать отчёт (Excel)", buf,
                        "dashboard.xlsx",
