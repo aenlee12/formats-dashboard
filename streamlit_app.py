@@ -15,39 +15,47 @@ def load_df(file):
 
 @st.cache_data
 def prepare_data(files):
-    # Ожидаем два файла: Доля списаний и Выручка
-    df_share, df_rev = None, None
+    df_share = None
+    df_rev = None
     for f in files:
         df = load_df(f)
-        if 'Доля списаний' in df.columns:
+        cols = [c.lower() for c in df.columns]
+        if any('доля' in c for c in cols):
             df_share = df.copy()
-        elif 'Выручка' in df.columns:
+        elif any('выруч' in c for c in cols):
             df_rev = df.copy()
+    if df_share is None or df_rev is None:
+        raise ValueError("Нужны файлы: один с колонкой 'доля' и один с 'выручка'")
     df_share['Доля списаний и ЗЦ'] = (
-        df_share['Доля списаний и ЗЦ']
+        df_share[df_share.columns[df_share.columns.str.lower().str.contains('доля')][0]]
         .astype(str).str.replace(',', '.').str.rstrip('%').astype(float)
     )
-    df_rev['Выручка'] = pd.to_numeric(df_rev['Выручка'], errors='coerce').fillna(0)
+    rev_col = df_rev.columns[df_rev.columns.str.lower().str.contains('выруч')][0]
+    df_rev['Выручка'] = pd.to_numeric(df_rev[rev_col], errors='coerce').fillna(0)
     return pd.merge(df_share, df_rev, on=['Категория','Неделя','DayOfWeek'], how='inner')
 
 def display_format_section(title, files):
     st.header(title)
     if len(files) != 2:
-        st.info("Загрузите 2 файла: Доля списаний и Выручка")
+        st.info("Загрузите 2 файла: один с 'доля' и один с 'выручка'")
         return
-    df = prepare_data(files)
-    # вычисляем среднее по неделе и %
+    try:
+        df = prepare_data(files)
+    except Exception as e:
+        st.error(f"Ошибка при подготовке данных: {e}")
+        return
+
     avg_rev = df.groupby('Неделя')['Выручка'].transform('mean')
     df['rev_pct'] = df['Выручка'] / avg_rev * 100
-    # фильтры
+
     cats = st.multiselect(f"Категории {title}", sorted(df['Категория'].unique()), default=None, key=title+"cats")
     weeks= st.multiselect(f"Недели {title}",    sorted(df['Неделя'].unique()),    default=None, key=title+"weeks")
     if cats:  df = df[df['Категория'].isin(cats)]
     if weeks: df = df[df['Неделя'].isin(weeks)]
-    # пороги
+
     share_thr = st.slider(f"Порог Доли списаний % ({title})", 0.0, 100.0, 20.0, key=title+"share_thr")
     rev_pct_thr= st.slider(f"Мин. % выручки от среднего ({title})", 0, 200, 80, key=title+"rev_pct")
-    # таблица
+
     pivot = df.pivot_table(
         index=['Неделя','DayOfWeek'], columns='Категория',
         values=['Доля списаний и ЗЦ','Выручка','rev_pct']
@@ -59,16 +67,17 @@ def display_format_section(title, files):
                   subset=pd.IndexSlice[:, pivot['rev_pct']<=rev_pct_thr])
     st.subheader("Таблица")
     st.dataframe(styled, use_container_width=True)
-    # графики
+
     st.subheader("График выручки")
     fig1 = px.line(df, x='DayOfWeek', y='Выручка', color='Категория',
                    line_group='Неделя', markers=True)
     st.plotly_chart(fig1, use_container_width=True)
+
     st.subheader("График доли списаний")
     fig2 = px.line(df, x='DayOfWeek', y='Доля списаний и ЗЦ', color='Категория',
                    line_group='Неделя', markers=True)
     st.plotly_chart(fig2, use_container_width=True)
-    # экспорт
+
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name=title, index=False)
