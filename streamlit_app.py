@@ -35,7 +35,7 @@ def prepare_data(files):
         if 'Выручка' in df.columns:
             df_rev   = df[['Категория','Неделя','DayOfWeek','Выручка']].copy()
     if df_share is None or df_rev is None:
-        raise ValueError("Нужны колонки «Доля списаний и ЗЦ» и «Выручка»." )
+        raise ValueError("Нужны колонки «Доля списаний и ЗЦ» и «Выручка" )
     s = df_share['Доля списаний и ЗЦ'].astype(str).str.replace(',', '.').str.rstrip('%')
     df_share['Доля списаний и ЗЦ'] = pd.to_numeric(s, errors='coerce').fillna(0)
     if df_share['Доля списаний и ЗЦ'].max() <= 1:
@@ -158,12 +158,19 @@ def main():
     st.plotly_chart(fig_waste, use_container_width=True)
 
     # 7. Heatmap (в конце отчета)
+    # Переопределяем переменные heatmap
+    sel_week = st.sidebar.selectbox("Неделя для Heatmap", sorted(df['Неделя'].unique()), index=0)
+    df_h = df[df['Неделя']==sel_week]
+    heat = df_h.pivot_table(index='Категория', columns='DayOfWeek', values='Выручка', aggfunc='sum').fillna(0)
+    heat_norm = heat.div(heat.max(axis=1), axis=0).fillna(0)
+
     st.subheader(f"🗺 Heatmap выручки по дням недели (неделя {sel_week})")
     fig_heat = px.imshow(
         heat_norm,
         labels=dict(x="День недели", y="Категория"),
         x=heat_norm.columns, y=heat_norm.index,
-        color_continuous_scale=['red','white','green']
+        color_continuous_scale=['red','white','green'],
+        title="Heatmap выручки по дням недели (в конце отчета)"
     )
     fig_heat.data[0].text = heat.values.tolist()
     fig_heat.data[0].texttemplate = "%{text:.0f}"
@@ -179,7 +186,8 @@ def main():
     with pd.ExcelWriter(buf, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name='raw', index=False)
         weekly_cat.to_excel(writer, sheet_name='trend_by_cat', index=False)
-        weekly_full.to_excel(writer, sheet_name='trend_test', index=False) if test_mode else None
+        if test_mode:
+            weekly_full.to_excel(writer, sheet_name='trend_test', index=False)
         heat.to_excel(writer, sheet_name=f'heat_{sel_week}', index=True)
     buf.seek(0)
     st.download_button(
