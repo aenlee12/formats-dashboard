@@ -104,17 +104,17 @@ def main():
     st.subheader(f"🗺 Heatmap выручки по дням недели (неделя {sel_week})")
     df_h = df[df['Неделя']==sel_week]
     heat = df_h.pivot_table(index='Категория', columns='DayOfWeek', values='Выручка', aggfunc='sum').fillna(0)
+    # нормализация для цвета
     heat_norm = heat.div(heat.max(axis=1), axis=0).fillna(0)
     fig_heat = px.imshow(
         heat_norm,
         labels=dict(x="День недели", y="Категория", color="Нормал. выручка"),
         x=heat_norm.columns, y=heat_norm.index,
         color_continuous_scale=['red','white','green'],
-        text_auto=heat.values,
-        title="Heatmap выручки по дням недели"
+        text=heat.values
     )
-    fig_heat.update_traces(xgap=1, ygap=1)
-    fig_heat.update_layout(height=600)
+    fig_heat.update_traces(texttemplate="%{text:.0f}", xgap=1, ygap=1)
+    fig_heat.update_layout(title="Heatmap выручки по дням недели", height=600)
     st.plotly_chart(fig_heat, use_container_width=True)
 
     # Анализ тестового периода
@@ -126,21 +126,26 @@ def main():
         test_week = st.sidebar.selectbox("Начальная неделя теста", all_weeks, index=len(all_weeks)-1)
         test_day  = st.sidebar.selectbox("Начальный день теста", days, format_func=lambda d: day_map[d])
 
-        # Разбиение на периоды
-        pre_mask = (df['Неделя'] < test_week) | ((df['Неделя']==test_week) & (df['DayOfWeek'] < test_day))
-        post_mask= (df['Неделя'] > test_week) | ((df['Неделя']==test_week) & (df['DayOfWeek'] >= test_day))
-        df_pre  = df[pre_mask]
-        df_post = df[post_mask]
+        # Определение полных недель
+        complete = df.groupby('Неделя')['DayOfWeek'].nunique() == len(days)
+        full_weeks = complete[complete].index
+        df_full = df[df['Неделя'].isin(full_weeks)]
+
+        # Разбиение на периоды (только полные недели)
+        pre_mask = (df_full['Неделя'] < test_week) | ((df_full['Неделя']==test_week) & (df_full['DayOfWeek'] < test_day))
+        post_mask= (df_full['Неделя'] > test_week) | ((df_full['Неделя']==test_week) & (df_full['DayOfWeek'] >= test_day))
+        df_pre  = df_full[pre_mask]
+        df_post = df_full[post_mask]
 
         # Усреднённая аналитика
         rev_pre   = df_pre['Выручка'].mean()
         rev_post  = df_post['Выручка'].mean()
         waste_pre = np.average(df_pre['Доля списаний и ЗЦ'], weights=df_pre['Выручка'])
         waste_post= np.average(df_post['Доля списаний и ЗЦ'], weights=df_post['Выручка'])
-        net_pre   = np.mean(df_pre['Выручка']*(1 - df_pre['Доля списаний и ЗЦ']/100))
-        net_post  = np.mean(df_post['Выручка']*(1 - df_post['Доля списаний и ЗЦ']/100))
+        net_pre   = np.mean(df_pre['Выручка'] * (1 - df_pre['Доля списаний и ЗЦ']/100))
+        net_post  = np.mean(df_post['Выручка'] * (1 - df_post['Доля списаний и ЗЦ']/100))
 
-        st.subheader("📋 Усреднённая аналитика до/во время теста")
+        st.subheader("📋 Усреднённая аналитика до/во время теста (только полные недели)")
         st.markdown(f"""
 - **Выручка (среднее)**: {rev_pre:.0f} → {rev_post:.0f} ₽ ({(rev_post/rev_pre-1)*100:.1f}% изменения)
 - **% списаний (среднее)**: {waste_pre:.1f}% → {waste_post:.1f}% ({(waste_post-waste_pre):+.1f} п.п.)
@@ -149,19 +154,19 @@ def main():
         )
 
         # График общей выручки по неделям
-        weekly_sum = df.groupby('Неделя')['Выручка'].sum().reset_index()
+        weekly_sum = df_full.groupby('Неделя')['Выручка'].sum().reset_index()
         fig_total_rev = px.line(weekly_sum, x='Неделя', y='Выручка', markers=True,
-                                title="Общая выручка по неделям")
+                                title="Общая выручка по полным неделям")
         fig_total_rev.add_vline(x=test_week, line_color='red', line_dash='dash')
         fig_total_rev.update_layout(height=400)
         st.plotly_chart(fig_total_rev, use_container_width=True)
 
         # График среднего % списаний по неделям
-        weekly_waste = df.groupby('Неделя').apply(
+        weekly_waste = df_full.groupby('Неделя').apply(
             lambda g: np.average(g['Доля списаний и ЗЦ'], weights=g['Выручка'])
         ).reset_index(name='Среднее % списаний')
         fig_total_waste = px.line(weekly_waste, x='Неделя', y='Среднее % списаний', markers=True,
-                                  title="Общий % списаний по неделям")
+                                  title="Общий % списаний по полным неделям")
         fig_total_waste.add_vline(x=test_week, line_color='red', line_dash='dash')
         fig_total_waste.update_layout(height=400)
         st.plotly_chart(fig_total_waste, use_container_width=True)
